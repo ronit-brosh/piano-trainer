@@ -1,0 +1,5 @@
+# secrets
+config.js
+
+# optional
+.env
