@@ -4,6 +4,13 @@
 
 document.addEventListener("DOMContentLoaded", () => {
 
+const GROQ_API_KEY = window.APP_CONFIG?.GROQ_API_KEY;
+if (!GROQ_API_KEY) {
+  alert("Missing Groq API key (config.js)");
+  return;
+}
+
+
 // ---------- Utils ----------
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 
@@ -38,15 +45,27 @@ let correctCount = 0;
 let wrongCount = 0;
 let firstAttempt = true;
 
-let handMode = "separate";
+let handMode = "right";
 let showNoteNames = true;
-let checkDurations = true;
+//let checkDurations = true;
 let leftHandMode = "notes"; // "notes", "chords", or "both"
 let isProcessing = false; // Prevent double counting during transition
 let noteStartTime = null; // Track when note was pressed
 let lastPressedNote = null; // Track which note is currently pressed
 let metronomeEnabled = false;
 let metronomeInterval = null;
+
+// Mistakes tracking
+let mistakesLog = {
+  notes: {}, // { "E3": { count: 5, hand: "left" }, ... }
+  chords: {}, // { "C3+E3+G3": { count: 2 }, ... }
+  durations: {} // { "E3-half": { count: 3, duration: "חצי" }, ... }
+};
+
+// Practice sequence
+let practiceSequence = null;
+let practiceIndex = 0;
+let practiceMode = false;
 
 // ---------- DOM ----------
 const statusEl = document.getElementById("status");
@@ -58,9 +77,17 @@ const wrongCountEl = document.getElementById("wrongCount");
 const handModeEl = document.getElementById("handMode");
 const toggleNoteNamesEl = document.getElementById("toggleNoteNames");
 const toggleDurationsEl = document.getElementById("toggleDurations");
+let checkDurations = toggleDurationsEl.checked;
+
 const toggleMetronomeEl = document.getElementById("toggleMetronome");
 const leftHandRadios = document.getElementsByName("leftHandMode");
 const resetScoreBtn = document.getElementById("resetScore");
+const generatePromptBtn = document.getElementById("generatePrompt");
+const practiceOutputDiv = document.getElementById("practiceOutput");
+const practiceSequenceDisplay = document.getElementById("practiceSequenceDisplay");
+const startPracticeBtn = document.getElementById("startPractice");
+const stopPracticeBtn = document.getElementById("stopPractice");
+const practiceProgressEl = document.getElementById("practiceProgress");
 
 // ---------- Hand mode ----------
 handModeEl.addEventListener("change", () => {
@@ -79,6 +106,7 @@ toggleNoteNamesEl.addEventListener("change", () => {
 
 toggleDurationsEl.addEventListener("change", () => {
   checkDurations = toggleDurationsEl.checked;
+  
   // This would affect future note generation if you want to randomize durations
 });
 
@@ -144,6 +172,332 @@ resetScoreBtn.addEventListener("click", () => {
   wrongCountEl.textContent = wrongCount;
   console.log("🔄 Score reset!");
 });
+
+// ---------- Mistakes Logging ----------
+function logMistake(type, data) {
+  console.log("📝 Logging mistake:", type, data);
+  
+  if (type === "note") {
+    const key = data.name;
+    if (!mistakesLog.notes[key]) {
+      mistakesLog.notes[key] = { count: 0, hand: data.hand };
+    }
+    mistakesLog.notes[key].count++;
+  } else if (type === "chord") {
+    const key = data.chordName;
+    if (!mistakesLog.chords[key]) {
+      mistakesLog.chords[key] = { count: 0 };
+    }
+    mistakesLog.chords[key].count++;
+  } else if (type === "duration") {
+    const key = `${data.name}-${data.duration.name}`;
+    if (!mistakesLog.durations[key]) {
+      mistakesLog.durations[key] = { 
+        count: 0, 
+        noteName: data.name,
+        duration: data.duration.display,
+        hand: data.hand
+      };
+    }
+    mistakesLog.durations[key].count++;
+  }
+  
+  console.log("Current mistakes log:", mistakesLog);
+}
+
+// ---------- Generate Prompt and Send to LLM (Groq) ----------
+generatePromptBtn.addEventListener("click", async () => {
+  let prompt = "# Piano Training - Focused Practice\n\n";
+  prompt += "Based on my practice session, I made the following mistakes:\n\n";
+  prompt += "Use ONLY these durations: Quarter, Half, Whole.\n";
+  prompt += "Do not include explanations or summaries.\n\n";
+  prompt += "Output only the list, one item per line.\n\n";
+
+
+  // Notes mistakes
+  const notesList = Object.entries(mistakesLog.notes)
+    .sort((a, b) => b[1].count - a[1].count);
+  
+  if (notesList.length > 0) {
+    prompt += "## Wrong Notes:\n";
+    notesList.forEach(([note, data]) => {
+      prompt += `- ${note} (${data.hand === "right" ? "Right hand" : "Left hand"}) - ${data.count} mistake${data.count > 1 ? 's' : ''}\n`;
+    });
+    prompt += "\n";
+  }
+  
+  // Chords mistakes
+  const chordsList = Object.entries(mistakesLog.chords)
+    .sort((a, b) => b[1].count - a[1].count);
+  
+  if (chordsList.length > 0) {
+    prompt += "## Wrong Chords:\n";
+    chordsList.forEach(([chord, data]) => {
+      prompt += `- ${chord} (Left hand) - ${data.count} mistake${data.count > 1 ? 's' : ''}\n`;
+    });
+    prompt += "\n";
+  }
+  
+  // Duration mistakes
+  const durationsList = Object.entries(mistakesLog.durations)
+    .sort((a, b) => b[1].count - a[1].count);
+  
+  if (durationsList.length > 0) {
+    prompt += "## Duration Mistakes:\n";
+    durationsList.forEach(([key, data]) => {
+      prompt += `- ${data.noteName} ${data.duration} (${data.hand === "right" ? "Right hand" : "Left hand"}) - ${data.count} mistake${data.count > 1 ? 's' : ''}\n`;
+    });
+    prompt += "\n";
+  }
+  
+  if (notesList.length === 0 && chordsList.length === 0 && durationsList.length === 0) {
+    alert("אין טעויות לתרגל! המשיכי לתרגל כדי לאסוף טעויות.");
+    return;
+  }
+  
+  prompt += "---\n\n";
+  prompt += "Please create a focused practice sequence of 15-20 notes that emphasizes the notes and chords I struggled with most. ";
+  prompt += "The sequence should:\n";
+  prompt += "1. Focus heavily on my most common mistakes\n";
+  prompt += "2. Include the correct hand for each note\n";
+  prompt += "3. Mix in some correct notes I didn't struggle with for context\n";
+  prompt += "4. Be playable and musical (not just random notes)\n\n";
+  prompt += "Format the output as a simple list:\n";
+  prompt += "Note, Hand, Duration\n";
+  prompt += "Example:\n";
+  prompt += "C3, Left, Quarter\n";
+  prompt += "E4, Right, Half\n";
+  prompt += "C3+E3+G3, Left, Quarter (chord)\n";
+  
+  generatePromptBtn.disabled = true;
+generatePromptBtn.textContent = "⏳ שולח ל-Groq...";
+
+try {
+  const response = await fetch(
+    "https://api.groq.com/openai/v1/chat/completions",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${GROQ_API_KEY}`
+      },
+      body: JSON.stringify({
+        model: "llama-3.1-8b-instant",
+        temperature: 0.7,
+        messages: [
+          {
+            role: "system",
+            content: "You are a professional piano teacher creating focused practice sequences."
+          },
+          {
+            role: "user",
+            content: prompt
+          }
+        ]
+      })
+    }
+  );
+
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error?.message || response.statusText);
+  }
+
+  const data = await response.json();
+  const responseText = data.choices?.[0]?.message?.content || "";
+  console.log("LLM RAW OUTPUT:\n", responseText);
+
+
+  if (!responseText) {
+    throw new Error("No response from Groq");
+  }
+
+  // Parse the practice sequence
+  practiceSequence = parsePracticeSequence(responseText);
+
+  if (practiceSequence.length > 0) {
+    practiceSequenceDisplay.textContent = responseText;
+    practiceOutputDiv.style.display = "block";
+    practiceOutputDiv.scrollIntoView({ behavior: "smooth" });
+
+    generatePromptBtn.textContent = "✅ התקבל!";
+    setTimeout(() => {
+      generatePromptBtn.textContent = "צור תרגול ממוקד";
+      generatePromptBtn.disabled = false;
+    }, 2000);
+  } else {
+    throw new Error("Could not parse practice sequence");
+  }
+
+} catch (err) {
+  console.error("Groq API error:", err);
+  alert("שגיאה בשליחה ל-Groq:\n" + err.message);
+  generatePromptBtn.textContent = "צור תרגול ממוקד";
+  generatePromptBtn.disabled = false;
+}
+});
+
+
+// ---------- Parse Practice Sequence ----------
+function parsePracticeSequence(text) {
+  const sequence = [];
+  const lines = text.split('\n');
+  
+  for (const line of lines) {
+    // Match format: "C4, Right, Quarter" or "C3+E3+G3, Left, Quarter (chord)"
+    const match = line.match(/([A-G][#b]?\d(?:\+[A-G][#b]?\d)*),\s*(Right|Left),\s*(Quarter|Half|Whole|q|h|w)/i);
+    
+    if (match) {
+      const noteName = match[1];
+      const hand = match[2].toLowerCase();
+      const durationStr = match[3].toLowerCase();
+      
+      // Map duration to our format
+      let duration;
+      if (durationStr === 'quarter' || durationStr === 'q') {
+        duration = DURATIONS[0]; // quarter
+      } else if (durationStr === 'half' || durationStr === 'h') {
+        duration = DURATIONS[1]; // half
+      } else if (durationStr === 'whole' || durationStr === 'w') {
+        duration = DURATIONS[2]; // whole
+      } else {
+        duration = DURATIONS[0]; // default to quarter
+      }
+      
+      // Check if it's a chord
+      const isChord = noteName.includes('+');
+      
+      if (isChord) {
+        // Parse chord notes
+        const chordNotes = noteName.split('+').map(n => noteNameToMidi(n));
+        sequence.push({
+          mode: "chord",
+          hand: hand,
+          chord: chordNotes,
+          chordName: noteName,
+          duration: duration
+        });
+      } else {
+        // Single note
+        const midi = noteNameToMidi(noteName);
+        sequence.push({
+          mode: "single",
+          midi: midi,
+          hand: hand,
+          name: noteName,
+          duration: duration
+        });
+      }
+    }
+  }
+  
+  console.log("Parsed sequence:", sequence);
+  return sequence;
+}
+
+// ---------- Note Name to MIDI ----------
+function noteNameToMidi(noteName) {
+  // Convert "C4" to MIDI number 60
+  const noteMatch = noteName.match(/([A-G][#b]?)(\d)/);
+  if (!noteMatch) return 60; // default
+  
+  const note = noteMatch[1];
+  const octave = parseInt(noteMatch[2]);
+  
+  const noteMap = {
+    'C': 0, 'C#': 1, 'Db': 1,
+    'D': 2, 'D#': 3, 'Eb': 3,
+    'E': 4,
+    'F': 5, 'F#': 6, 'Gb': 6,
+    'G': 7, 'G#': 8, 'Ab': 8,
+    'A': 9, 'A#': 10, 'Bb': 10,
+    'B': 11
+  };
+  
+  return (octave + 1) * 12 + noteMap[note];
+}
+
+// ---------- Start Practice ----------
+startPracticeBtn.addEventListener("click", () => {
+  if (!practiceSequence || practiceSequence.length === 0) {
+    alert("אין רצף תרגול!");
+    return;
+  }
+  
+  practiceMode = true;
+  practiceIndex = 0;
+  startPracticeBtn.style.display = "none";
+  stopPracticeBtn.style.display = "inline-block";
+  
+  // Show first note
+  showPracticeNote();
+});
+
+// ---------- Stop Practice ----------
+stopPracticeBtn.addEventListener("click", () => {
+  practiceMode = false;
+  startPracticeBtn.style.display = "inline-block";
+  stopPracticeBtn.style.display = "none";
+  practiceProgressEl.textContent = "";
+  
+  // Return to normal mode
+  pickExpectedNote();
+});
+
+// ---------- Show Practice Note ----------
+function showPracticeNote() {
+  if (!practiceMode || practiceIndex >= practiceSequence.length) {
+    // Practice complete!
+    practiceMode = false;
+    startPracticeBtn.style.display = "inline-block";
+    stopPracticeBtn.style.display = "none";
+    expectedNoteEl.textContent = "🎉 סיימת את התרגול!";
+    practiceProgressEl.textContent = "";
+    setTimeout(() => {
+      pickExpectedNote();
+    }, 2000);
+    return;
+  }
+  
+  const item = practiceSequence[practiceIndex];
+  expected = item;
+  noteColor = "black";
+  firstAttempt = true;
+  isProcessing = false;
+  
+  // Update progress
+  practiceProgressEl.textContent = `${practiceIndex + 1} / ${practiceSequence.length}`;
+  
+  // Display the note
+  if (item.mode === "chord") {
+    expected.pressed = new Set();
+    let msg = `${item.hand === "right" ? "יד ימין" : "יד שמאל"} - אקורד`;
+    if (showNoteNames) {
+      msg += ` (${item.chordName})`;
+    }
+    if (checkDurations) {
+      msg += ` ${item.duration.display}`;
+    }
+    expectedNoteEl.textContent = msg;
+    drawChord(expected);
+  } else {
+    let msg = item.hand === "right" ? "יד ימין" : "יד שמאל";
+    if (showNoteNames) {
+      msg += ` (${item.name})`;
+    }
+    if (checkDurations) {
+      msg += ` ${item.duration.display}`;
+    }
+    expectedNoteEl.textContent = msg;
+    drawSingle(expected);
+  }
+}
+
+// ---------- Update MIDI Handler for Practice Mode ----------
+// We need to modify the existing MIDI handler to move to next note in practice mode
+// This will be added at the end of successful note/chord completion
+
+// ---------- Custom Sequence ----------
 
 // ---------- MIDI ----------
 connectBtn.addEventListener("click", async () => {
@@ -348,13 +702,27 @@ function handleMIDIMessage(e) {
       expectedNoteEl.textContent = "✅ נכון!";
       noteColor = "green";
       drawSingle(expected);
-      setTimeout(pickExpectedNote, 300);
+      
+      setTimeout(() => {
+        if (practiceMode) {
+          practiceIndex++;
+          showPracticeNote();
+        } else {
+          pickExpectedNote();
+        }
+      }, 300);
     } else {
       console.log("❌ Duration wrong!");
       if (firstAttempt) {
         wrongCount++;
         wrongCountEl.textContent = wrongCount;
         firstAttempt = false;
+        // Log the duration mistake
+        logMistake("duration", {
+          name: expected.name,
+          duration: expected.duration,
+          hand: expected.hand
+        });
       }
       const diff = (noteDuration - expectedDuration).toFixed(1);
       expectedNoteEl.textContent = `❌ אורך לא נכון (${diff > 0 ? '+' : ''}${diff}s)`;
@@ -388,7 +756,15 @@ function handleMIDIMessage(e) {
         isProcessing = true;
         expectedNoteEl.textContent = "✅ נכון!";
         noteColor = "green";
-        setTimeout(pickExpectedNote, 500);
+        
+        setTimeout(() => {
+          if (practiceMode) {
+            practiceIndex++;
+            showPracticeNote();
+          } else {
+            pickExpectedNote();
+          }
+        }, 500);
       }
     } else {
       console.log("❌ Wrong note in chord:", note);
@@ -396,6 +772,10 @@ function handleMIDIMessage(e) {
         wrongCount++;
         wrongCountEl.textContent = wrongCount;
         firstAttempt = false;
+        // Log the chord mistake
+        logMistake("chord", {
+          chordName: expected.chordName
+        });
       }
       expectedNoteEl.textContent = "❌ נסה/י שוב";
       noteColor = "red";
@@ -452,7 +832,15 @@ function handleMIDIMessage(e) {
     expectedNoteEl.textContent = "✅ נכון!";
     noteColor = "green";
     drawSingle(expected);
-    setTimeout(pickExpectedNote, 300);
+    
+    setTimeout(() => {
+      if (practiceMode) {
+        practiceIndex++;
+        showPracticeNote();
+      } else {
+        pickExpectedNote();
+      }
+    }, 300);
   } else {
     console.log("❌ WRONG NOTE! firstAttempt:", firstAttempt);
     if (firstAttempt) {
@@ -460,6 +848,11 @@ function handleMIDIMessage(e) {
       console.log("   → COUNTED WRONG! wrongCount:", wrongCount);
       wrongCountEl.textContent = wrongCount;
       firstAttempt = false;
+      // Log the note mistake
+      logMistake("note", {
+        name: expected.name,
+        hand: expected.hand
+      });
     }
     expectedNoteEl.textContent = "❌ נסה/י שוב";
     noteColor = "red";

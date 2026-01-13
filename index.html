@@ -12,9 +12,7 @@
       text-align: right;
     }
 
-    h1 {
-      color: #333;
-    }
+    h1 { color: #333; }
 
     button {
       padding: 10px 20px;
@@ -24,40 +22,21 @@
       border: none;
       border-radius: 5px;
       cursor: pointer;
-      font-family: Arial, sans-serif;
     }
 
-    button:hover {
-      background-color: #45a049;
-    }
+    button:hover { background-color: #45a049; }
 
-    select {
-      padding: 5px 10px;
-      font-size: 14px;
-      font-family: Arial, sans-serif;
-    }
+    select { padding: 5px 10px; }
 
-    #status {
-      font-weight: bold;
-      color: #666;
-    }
-
+    #status { font-weight: bold; }
     #expectedNote {
       font-size: 24px;
       font-weight: bold;
       margin-top: 20px;
       color: #2196F3;
     }
-
-    #staff {
-      margin-top: 20px;
-      direction: ltr;
-    }
-
-    #score {
-      font-size: 18px;
-      margin-top: 15px;
-    }
+    #staff { margin-top: 20px; direction: ltr; }
+    #score { font-size: 18px; margin-top: 15px; }
   </style>
 </head>
 
@@ -66,78 +45,56 @@
 
   <button id="connect">חבר MIDI</button>
   <p id="status">לא מחובר</p>
-  
-  <details style="margin: 15px 0; padding: 10px; background: #f0f0f0; border-radius: 5px;">
-    <summary style="cursor: pointer; font-weight: bold;">❓ בעיות חיבור? לחץ כאן</summary>
-    <ul style="margin-top: 10px; line-height: 1.8;">
-      <li>✓ בדוק שהפסנתר/קלידים מחובר לכבל USB</li>
-      <li>✓ ודא שההתקן דלוק</li>
-      <li>✓ נסה לנתק ולחבר מחדש את כבל ה-USB</li>
-      <li>✓ סגור דפדפנים או תוכנות אחרות שעשויות להשתמש ב-MIDI</li>
-      <li>✓ רענן את הדף (F5) ונסה שוב</li>
-      <li>✓ פתח את ה-Console (F12) וחפש הודעות שגיאה</li>
-    </ul>
-  </details>
-  
+
   <div style="margin: 20px 0;">
-    <label style="display: block; margin-bottom: 10px;">
+    <label>
       <strong>בחר אופן נגינה:</strong>
       <select id="handMode">
-        <option value="separate">שתי ידיים (בנפרד)</option>
-        <option value="together">שתי ידיים (יחד)</option>
-        <option value="right">יד ימין בלבד</option>
+         <option value="right">יד ימין בלבד</option>
         <option value="left">יד שמאל בלבד</option>
+         <option value="separate">שתי ידיים (בנפרד)</option>
+        <option value="together">שתי ידיים (יחד)</option>
+
       </select>
     </label>
-    
-    <div style="display: block; margin-bottom: 10px;">
+
+    <div style="margin-top: 10px;">
       <strong>יד שמאל:</strong><br/>
-      <label style="margin-left: 15px;">
-        <input type="radio" name="leftHandMode" value="notes" checked />
-        תווים בלבד
-      </label>
-      <label style="margin-left: 15px;">
-        <input type="radio" name="leftHandMode" value="chords" />
-        אקורדים בלבד
-      </label>
-      <label style="margin-left: 15px;">
-        <input type="radio" name="leftHandMode" value="both" />
-        תווים ואקורדים
-      </label>
+      <label><input type="radio" name="leftHandMode" value="notes" checked /> תווים</label>
+      <label><input type="radio" name="leftHandMode" value="chords" /> אקורדים</label>
+      <label><input type="radio" name="leftHandMode" value="both" /> תווים ואקורדים</label>
     </div>
-    
-    <label style="display: block; margin-bottom: 10px;">
-      <input type="checkbox" id="toggleNoteNames" checked />
-      הצג שמות תווים
-    </label>
-    
-    <label style="display: block; margin-bottom: 10px;">
-      <input type="checkbox" id="toggleDurations" checked />
-      בדוק אורך תו
-    </label>
-    
-    <label style="display: block; margin-bottom: 10px;">
-      <input type="checkbox" id="toggleMetronome" />
-      מטרונום
-    </label>
+
+    <label><input type="checkbox" id="toggleNoteNames" checked /> הצג שמות תווים</label><br/>
+    <label><input type="checkbox" id="toggleDurations"  /> בדוק אורך תו</label><br/>
+    <label><input type="checkbox" id="toggleMetronome" /> מטרונום</label>
   </div>
 
   <p id="expectedNote"></p>
-  
+
   <p id="score">
     ✅ נכון: <span id="correctCount">0</span>
-    &nbsp;&nbsp;
     ❌ שגוי: <span id="wrongCount">0</span>
-    &nbsp;&nbsp;
-    <button id="resetScore" style="padding: 5px 15px; font-size: 14px; background-color: #ff9800; cursor: pointer;">אפס ניקוד</button>
+    <button id="resetScore">אפס</button>
+    <button id="generatePrompt">צור תרגול ממוקד</button>
   </p>
+
+  <div id="practiceOutput" style="display:none; margin-top:20px;">
+    <h3>תרגול ממוקד מוכן 🎯</h3>
+    <details>
+      <summary>הצג רצף</summary>
+      <pre id="practiceSequenceDisplay"></pre>
+    </details>
+    <button id="startPractice">▶️ התחל</button>
+    <button id="stopPractice" style="display:none;">⏹️ עצור</button>
+    <span id="practiceProgress"></span>
+  </div>
 
   <div id="staff"></div>
 
-  <!-- VexFlow -->
   <script src="https://unpkg.com/vexflow@4.2.5/releases/vexflow-min.js"></script>
+    <script src="config.js"></script>
+    <script src="app.js"></script>
 
-  <!-- App JS -->
-  <script src="app.js"></script>
 </body>
 </html>
