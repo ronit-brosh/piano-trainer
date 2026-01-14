@@ -3,6 +3,8 @@
 // ================================
 
 document.addEventListener("DOMContentLoaded", () => {
+    MidiInput.mode = "mock"; // ברירת מחדל
+
 
 const GROQ_API_KEY = window.APP_CONFIG?.GROQ_API_KEY;
 if (!GROQ_API_KEY) {
@@ -88,6 +90,72 @@ const practiceSequenceDisplay = document.getElementById("practiceSequenceDisplay
 const startPracticeBtn = document.getElementById("startPractice");
 const stopPracticeBtn = document.getElementById("stopPractice");
 const practiceProgressEl = document.getElementById("practiceProgress");
+const virtualKeyboard = document.getElementById("virtualKeyboard");
+const keysContainer = document.getElementById("keys");
+
+//const mockMidiBtn = document.getElementById("mockMidi");
+const mockMidiToggle = document.getElementById("mockMidiToggle");
+MidiInput.mode = mockMidiToggle.checked ? "mock" : "real";
+
+
+
+    
+
+const VIRTUAL_KEYS = [
+  { name: "C", midi: 60 },
+  { name: "D", midi: 62 },
+  { name: "E", midi: 64 },
+  { name: "F", midi: 65 },
+  { name: "G", midi: 67 },
+  { name: "A", midi: 69 },
+  { name: "B", midi: 71 }
+];
+
+if (mockMidiToggle.checked) {
+    MidiInput.mode = "mock";
+  virtualKeyboard.style.display = "block";
+  renderVirtualKeyboard();
+} else {
+    MidiInput.mode = "real";
+}
+
+function renderVirtualKeyboard() {
+  keysContainer.innerHTML = "";
+  VIRTUAL_KEYS.forEach(k => {
+    const el = document.createElement("div");
+    el.className = "virtual-key";
+    el.textContent = k.name;
+    el.onclick = () => playNote(k.midi); // משתמש ב-Mock הקיים
+    keysContainer.appendChild(el);
+  });
+}
+
+
+//MidiInput.mode = "mock"; // ⬅️ ברירת מחדל
+
+mockMidiToggle.addEventListener("change", async () => {
+  if (mockMidiToggle.checked) {
+    MidiInput.mode = "mock";
+    await MidiInput.init(handleMIDIMessage);
+    statusEl.textContent = "🎹 Mock MIDI פעיל";
+    statusEl.style.color = "blue";
+        virtualKeyboard.style.display = "block";
+    renderVirtualKeyboard();
+  } else {
+    statusEl.textContent = "Mock כבוי – לחצי 'חבר MIDI'";
+    statusEl.style.color = "gray";
+        virtualKeyboard.style.display = "none";
+
+  }
+
+  pickExpectedNote();
+});
+
+
+
+
+
+
 
 // ---------- Hand mode ----------
 handModeEl.addEventListener("change", () => {
@@ -500,49 +568,27 @@ function showPracticeNote() {
 // ---------- Custom Sequence ----------
 
 // ---------- MIDI ----------
+
 connectBtn.addEventListener("click", async () => {
   try {
-    statusEl.textContent = "מנסה להתחבר...";
+    mockMidiToggle.checked = false;
+    MidiInput.mode = "real";
+
+    statusEl.textContent = "מתחבר ל-MIDI...";
     statusEl.style.color = "orange";
-    
-    const midi = await navigator.requestMIDIAccess();
-    const inputs = [...midi.inputs.values()];
-    
-    console.log("MIDI inputs found:", inputs.length);
-    inputs.forEach((input, i) => {
-      console.log(`Input ${i}:`, input.name, input.manufacturer, input.state);
-    });
-    
-    if (!inputs.length) {
-      statusEl.textContent = "לא נמצאו התקני MIDI. בדוק שהפסנתר מחובר ודלוק.";
-      statusEl.style.color = "red";
-      return;
-    }
-    
-    // Try to find a connected input
-    let connectedInput = inputs.find(input => input.state === "connected");
-    if (!connectedInput) connectedInput = inputs[0];
-    
-    connectedInput.onmidimessage = handleMIDIMessage;
-    statusEl.textContent = `מחובר ל-${connectedInput.name} ✅`;
+
+    await MidiInput.init(handleMIDIMessage);
+
+    statusEl.textContent = "🎹 מחובר ל-MIDI אמיתי";
     statusEl.style.color = "green";
     pickExpectedNote();
-    
-    // Listen for disconnection
-    midi.onstatechange = (e) => {
-      console.log("MIDI state change:", e.port.name, e.port.state);
-      if (e.port.state === "disconnected") {
-        statusEl.textContent = "ההתקן התנתק. לחץ 'חבר MIDI' שוב.";
-        statusEl.style.color = "red";
-      }
-    };
-    
-  } catch (error) {
-    console.error("MIDI Error:", error);
-    statusEl.textContent = `שגיאה: ${error.message}`;
+
+  } catch (e) {
+    statusEl.textContent = e.message;
     statusEl.style.color = "red";
   }
 });
+
 
 // ---------- Pick expected ----------
 function pickExpectedNote() {

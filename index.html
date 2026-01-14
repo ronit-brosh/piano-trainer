@@ -37,6 +37,24 @@
     }
     #staff { margin-top: 20px; direction: ltr; }
     #score { font-size: 18px; margin-top: 15px; }
+    
+    .virtual-key {
+  display: inline-block;
+  width: 44px;
+  height: 80px;
+  margin: 2px;
+  background: #eee;
+  border: 1px solid #999;
+  border-radius: 4px;
+  text-align: center;
+  line-height: 80px;
+  cursor: pointer;
+  user-select: none;
+}
+.virtual-key:hover {
+  background: #ddd;
+}
+
   </style>
 </head>
 
@@ -44,6 +62,11 @@
   <h1>מאמן קריאת תווים 🎹</h1>
 
   <button id="connect">חבר MIDI</button>
+<label style="margin-right:10px;">
+  <input type="checkbox" id="mockMidiToggle" checked />
+  Mock MIDI
+</label>
+
   <p id="status">לא מחובר</p>
 
   <div style="margin: 20px 0;">
@@ -78,6 +101,12 @@
     <button id="resetScore">אפס</button>
     <button id="generatePrompt">צור תרגול ממוקד</button>
   </p>
+<div id="virtualKeyboard" style="display:none; margin-top:20px; direction:ltr;">
+  <strong>🎹 מקלדת וירטואלית</strong>
+  <div id="keys" style="margin-top:10px;"></div>
+</div>
+
+
 
   <div id="practiceOutput" style="display:none; margin-top:20px;">
     <h3>תרגול ממוקד מוכן 🎯</h3>
@@ -94,6 +123,7 @@
 
   <script src="https://unpkg.com/vexflow@4.2.5/releases/vexflow-min.js"></script>
     <script src="config.js"></script>
+    <script src="midiInput.js"></script>
     <script src="app.js"></script>
 
 </body>
