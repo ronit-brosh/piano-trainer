@@ -1,5 +1,4 @@
 // midiInput.js
-console.log("midiInput.js loaded");
 
 const MidiInput = {
   mode: "mock", // "mock" | "real"

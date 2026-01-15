@@ -99,13 +99,17 @@
     ✅ נכון: <span id="correctCount">0</span>
     ❌ שגוי: <span id="wrongCount">0</span>
     <button id="resetScore">אפס</button>
-    <button id="generatePrompt">צור תרגול ממוקד</button>
   </p>
 <div id="virtualKeyboard" style="display:none; margin-top:20px; direction:ltr;">
   <strong>🎹 מקלדת וירטואלית</strong>
   <div id="keys" style="margin-top:10px;"></div>
 </div>
 
+<div id="agentSuggestion" style="display:none; margin-top:15px;">
+  🤖 שמתי לב שיש קושי חוזר. רוצה תרגול ממוקד?
+  <button id="agentYes">כן</button>
+  <button id="agentNo">לא עכשיו</button>
+</div>
 
 
   <div id="practiceOutput" style="display:none; margin-top:20px;">
@@ -114,7 +118,6 @@
       <summary>הצג רצף</summary>
       <pre id="practiceSequenceDisplay"></pre>
     </details>
-    <button id="startPractice">▶️ התחל</button>
     <button id="stopPractice" style="display:none;">⏹️ עצור</button>
     <span id="practiceProgress"></span>
   </div>
@@ -123,6 +126,7 @@
 
   <script src="https://unpkg.com/vexflow@4.2.5/releases/vexflow-min.js"></script>
     <script src="config.js"></script>
+        <script src="agent.js"></script>
     <script src="midiInput.js"></script>
     <script src="app.js"></script>
 

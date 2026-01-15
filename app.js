@@ -56,6 +56,8 @@ let noteStartTime = null; // Track when note was pressed
 let lastPressedNote = null; // Track which note is currently pressed
 let metronomeEnabled = false;
 let metronomeInterval = null;
+let lastAgentSuggestion = null;
+
 
 // Mistakes tracking
 let mistakesLog = {
@@ -63,6 +65,10 @@ let mistakesLog = {
   chords: {}, // { "C3+E3+G3": { count: 2 }, ... }
   durations: {} // { "E3-half": { count: 3, duration: "חצי" }, ... }
 };
+
+
+window.mistakesLog = mistakesLog;
+
 
 // Practice sequence
 let practiceSequence = null;
@@ -84,7 +90,6 @@ let checkDurations = toggleDurationsEl.checked;
 const toggleMetronomeEl = document.getElementById("toggleMetronome");
 const leftHandRadios = document.getElementsByName("leftHandMode");
 const resetScoreBtn = document.getElementById("resetScore");
-const generatePromptBtn = document.getElementById("generatePrompt");
 const practiceOutputDiv = document.getElementById("practiceOutput");
 const practiceSequenceDisplay = document.getElementById("practiceSequenceDisplay");
 const startPracticeBtn = document.getElementById("startPractice");
@@ -131,6 +136,10 @@ function renderVirtualKeyboard() {
 }
 
 
+
+
+
+
 //MidiInput.mode = "mock"; // ⬅️ ברירת מחדל
 
 mockMidiToggle.addEventListener("change", async () => {
@@ -148,8 +157,9 @@ mockMidiToggle.addEventListener("change", async () => {
 
   }
 
+if (!practiceMode) {
   pickExpectedNote();
-});
+}});
 
 
 
@@ -160,7 +170,9 @@ mockMidiToggle.addEventListener("change", async () => {
 // ---------- Hand mode ----------
 handModeEl.addEventListener("change", () => {
   handMode = handModeEl.value;
+if (!practiceMode) {
   pickExpectedNote();
+}
 });
 
 // ---------- Toggles ----------
@@ -182,7 +194,10 @@ toggleDurationsEl.addEventListener("change", () => {
 leftHandRadios.forEach(radio => {
   radio.addEventListener("change", () => {
     leftHandMode = radio.value;
-    pickExpectedNote(); // Generate new note with updated settings
+
+    if (!practiceMode) {
+  pickExpectedNote(); // Generate new note with updated settings
+}
   });
 });
 
@@ -234,6 +249,10 @@ toggleMetronomeEl.addEventListener("change", () => {
 
 // ---------- Reset Score ----------
 resetScoreBtn.addEventListener("click", () => {
+    mistakesLog = { notes: {}, chords: {}, durations: {} };
+window.mistakesLog = mistakesLog;
+lastAgentSuggestion = null;
+
   correctCount = 0;
   wrongCount = 0;
   correctCountEl.textContent = correctCount;
@@ -271,197 +290,85 @@ function logMistake(type, data) {
   }
   
   console.log("Current mistakes log:", mistakesLog);
+
+  
+
 }
 
-// ---------- Generate Prompt and Send to LLM (Groq) ----------
-generatePromptBtn.addEventListener("click", async () => {
-  let prompt = "# Piano Training - Focused Practice\n\n";
-  prompt += "Based on my practice session, I made the following mistakes:\n\n";
-  prompt += "Use ONLY these durations: Quarter, Half, Whole.\n";
-  prompt += "Do not include explanations or summaries.\n\n";
-  prompt += "Output only the list, one item per line.\n\n";
 
-
-  // Notes mistakes
-  const notesList = Object.entries(mistakesLog.notes)
-    .sort((a, b) => b[1].count - a[1].count);
   
-  if (notesList.length > 0) {
-    prompt += "## Wrong Notes:\n";
-    notesList.forEach(([note, data]) => {
-      prompt += `- ${note} (${data.hand === "right" ? "Right hand" : "Left hand"}) - ${data.count} mistake${data.count > 1 ? 's' : ''}\n`;
-    });
-    prompt += "\n";
-  }
   
-  // Chords mistakes
-  const chordsList = Object.entries(mistakesLog.chords)
-    .sort((a, b) => b[1].count - a[1].count);
-  
-  if (chordsList.length > 0) {
-    prompt += "## Wrong Chords:\n";
-    chordsList.forEach(([chord, data]) => {
-      prompt += `- ${chord} (Left hand) - ${data.count} mistake${data.count > 1 ? 's' : ''}\n`;
-    });
-    prompt += "\n";
-  }
-  
-  // Duration mistakes
-  const durationsList = Object.entries(mistakesLog.durations)
-    .sort((a, b) => b[1].count - a[1].count);
-  
-  if (durationsList.length > 0) {
-    prompt += "## Duration Mistakes:\n";
-    durationsList.forEach(([key, data]) => {
-      prompt += `- ${data.noteName} ${data.duration} (${data.hand === "right" ? "Right hand" : "Left hand"}) - ${data.count} mistake${data.count > 1 ? 's' : ''}\n`;
-    });
-    prompt += "\n";
-  }
-  
-  if (notesList.length === 0 && chordsList.length === 0 && durationsList.length === 0) {
-    alert("אין טעויות לתרגל! המשיכי לתרגל כדי לאסוף טעויות.");
-    return;
-  }
-  
-  prompt += "---\n\n";
-  prompt += "Please create a focused practice sequence of 15-20 notes that emphasizes the notes and chords I struggled with most. ";
-  prompt += "The sequence should:\n";
-  prompt += "1. Focus heavily on my most common mistakes\n";
-  prompt += "2. Include the correct hand for each note\n";
-  prompt += "3. Mix in some correct notes I didn't struggle with for context\n";
-  prompt += "4. Be playable and musical (not just random notes)\n\n";
-  prompt += "Format the output as a simple list:\n";
-  prompt += "Note, Hand, Duration\n";
-  prompt += "Example:\n";
-  prompt += "C3, Left, Quarter\n";
-  prompt += "E4, Right, Half\n";
-  prompt += "C3+E3+G3, Left, Quarter (chord)\n";
-  
-  generatePromptBtn.disabled = true;
-generatePromptBtn.textContent = "⏳ שולח ל-Groq...";
-
-try {
-  const response = await fetch(
-    "https://api.groq.com/openai/v1/chat/completions",
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${GROQ_API_KEY}`
-      },
-      body: JSON.stringify({
-        model: "llama-3.1-8b-instant",
-        temperature: 0.7,
-        messages: [
-          {
-            role: "system",
-            content: "You are a professional piano teacher creating focused practice sequences."
-          },
-          {
-            role: "user",
-            content: prompt
-          }
-        ]
-      })
-    }
-  );
-
-  if (!response.ok) {
-    const err = await response.json();
-    throw new Error(err.error?.message || response.statusText);
-  }
-
-  const data = await response.json();
-  const responseText = data.choices?.[0]?.message?.content || "";
-  console.log("LLM RAW OUTPUT:\n", responseText);
 
 
-  if (!responseText) {
-    throw new Error("No response from Groq");
-  }
-
-  // Parse the practice sequence
-  practiceSequence = parsePracticeSequence(responseText);
-
-  if (practiceSequence.length > 0) {
-    practiceSequenceDisplay.textContent = responseText;
-    practiceOutputDiv.style.display = "block";
-    practiceOutputDiv.scrollIntoView({ behavior: "smooth" });
-
-    generatePromptBtn.textContent = "✅ התקבל!";
-    setTimeout(() => {
-      generatePromptBtn.textContent = "צור תרגול ממוקד";
-      generatePromptBtn.disabled = false;
-    }, 2000);
-  } else {
-    throw new Error("Could not parse practice sequence");
-  }
-
-} catch (err) {
-  console.error("Groq API error:", err);
-  alert("שגיאה בשליחה ל-Groq:\n" + err.message);
-  generatePromptBtn.textContent = "צור תרגול ממוקד";
-  generatePromptBtn.disabled = false;
+function showAgentHint(text) {
+  expectedNoteEl.textContent = `🎯 ${text}`;
 }
-});
 
 
 // ---------- Parse Practice Sequence ----------
-function parsePracticeSequence(text) {
+window.parsePracticeSequence = function parsePracticeSequence(text) {
   const sequence = [];
   const lines = text.split('\n');
-  
+
+  const normalizeNote = n =>
+    /[0-9]/.test(n) ? n : `${n}4`; // ברירת מחדל לאוקטבה 4
+
   for (const line of lines) {
-    // Match format: "C4, Right, Quarter" or "C3+E3+G3, Left, Quarter (chord)"
-    const match = line.match(/([A-G][#b]?\d(?:\+[A-G][#b]?\d)*),\s*(Right|Left),\s*(Quarter|Half|Whole|q|h|w)/i);
-    
-    if (match) {
-      const noteName = match[1];
-      const hand = match[2].toLowerCase();
-      const durationStr = match[3].toLowerCase();
-      
-      // Map duration to our format
-      let duration;
-      if (durationStr === 'quarter' || durationStr === 'q') {
-        duration = DURATIONS[0]; // quarter
-      } else if (durationStr === 'half' || durationStr === 'h') {
-        duration = DURATIONS[1]; // half
-      } else if (durationStr === 'whole' || durationStr === 'w') {
-        duration = DURATIONS[2]; // whole
-      } else {
-        duration = DURATIONS[0]; // default to quarter
-      }
-      
-      // Check if it's a chord
-      const isChord = noteName.includes('+');
-      
-      if (isChord) {
-        // Parse chord notes
-        const chordNotes = noteName.split('+').map(n => noteNameToMidi(n));
-        sequence.push({
-          mode: "chord",
-          hand: hand,
-          chord: chordNotes,
-          chordName: noteName,
-          duration: duration
-        });
-      } else {
-        // Single note
-        const midi = noteNameToMidi(noteName);
-        sequence.push({
-          mode: "single",
-          midi: midi,
-          hand: hand,
-          name: noteName,
-          duration: duration
-        });
-      }
+    const match = line.match(
+      /([A-G][#b]?(?:\d)?(?:\+[A-G][#b]?(?:\d)?)*),\s*(Right|Left),\s*(Quarter|Half|Whole|q|h|w)/i
+    );
+
+    if (!match) continue;
+
+    const rawNoteName = match[1];
+    const hand = match[2].toLowerCase();
+    const durationStr = match[3].toLowerCase();
+
+    const normalizedName = rawNoteName
+      .split("+")
+      .map(normalizeNote)
+      .join("+");
+
+    let duration;
+    if (durationStr === "quarter" || durationStr === "q") {
+      duration = DURATIONS[0];
+    } else if (durationStr === "half" || durationStr === "h") {
+      duration = DURATIONS[1];
+    } else {
+      duration = DURATIONS[2];
+    }
+
+    if (normalizedName.includes("+")) {
+      // chord
+      const chordNotes = normalizedName
+        .split("+")
+        .map(n => noteNameToMidi(n));
+
+      sequence.push({
+        mode: "chord",
+        hand,
+        chord: chordNotes,
+        chordName: normalizedName,
+        duration
+      });
+    } else {
+      // single note
+      const midi = noteNameToMidi(normalizedName);
+
+      sequence.push({
+        mode: "single",
+        midi,
+        hand,
+        name: normalizedName,
+        duration
+      });
     }
   }
-  
-  console.log("Parsed sequence:", sequence);
+
+  console.log("🎼 Parsed sequence:", sequence);
   return sequence;
-}
+};
+
 
 // ---------- Note Name to MIDI ----------
 function noteNameToMidi(noteName) {
@@ -485,48 +392,29 @@ function noteNameToMidi(noteName) {
   return (octave + 1) * 12 + noteMap[note];
 }
 
-// ---------- Start Practice ----------
-startPracticeBtn.addEventListener("click", () => {
-  if (!practiceSequence || practiceSequence.length === 0) {
-    alert("אין רצף תרגול!");
-    return;
-  }
-  
-  practiceMode = true;
-  practiceIndex = 0;
-  startPracticeBtn.style.display = "none";
-  stopPracticeBtn.style.display = "inline-block";
-  
-  // Show first note
-  showPracticeNote();
-});
+stopPracticeBtn.addEventListener("click", exitFocusedPractice);
 
-// ---------- Stop Practice ----------
-stopPracticeBtn.addEventListener("click", () => {
-  practiceMode = false;
-  startPracticeBtn.style.display = "inline-block";
-  stopPracticeBtn.style.display = "none";
-  practiceProgressEl.textContent = "";
-  
-  // Return to normal mode
-  pickExpectedNote();
-});
+function enterFocusedPractice(sequence) {
+  practiceSequence = sequence;
+  practiceIndex = 0;
+  practiceMode = true;
+
+  practiceOutputDiv.style.display = "block";
+  stopPracticeBtn.style.display = "inline-block";
+
+  showPracticeNote();
+}
+
+
 
 // ---------- Show Practice Note ----------
 function showPracticeNote() {
   if (!practiceMode || practiceIndex >= practiceSequence.length) {
-    // Practice complete!
-    practiceMode = false;
-    startPracticeBtn.style.display = "inline-block";
-    stopPracticeBtn.style.display = "none";
-    expectedNoteEl.textContent = "🎉 סיימת את התרגול!";
-    practiceProgressEl.textContent = "";
-    setTimeout(() => {
-      pickExpectedNote();
-    }, 2000);
-    return;
-  }
-  
+  expectedNoteEl.textContent = "🎉 סיימת את התרגול!";
+  setTimeout(exitFocusedPractice, 1500);
+  return;
+}
+
   const item = practiceSequence[practiceIndex];
   expected = item;
   noteColor = "black";
@@ -556,6 +444,7 @@ function showPracticeNote() {
     if (checkDurations) {
       msg += ` ${item.duration.display}`;
     }
+    
     expectedNoteEl.textContent = msg;
     drawSingle(expected);
   }
@@ -581,7 +470,9 @@ connectBtn.addEventListener("click", async () => {
 
     statusEl.textContent = "🎹 מחובר ל-MIDI אמיתי";
     statusEl.style.color = "green";
-    pickExpectedNote();
+if (!practiceMode) {
+  pickExpectedNote();
+}
 
   } catch (e) {
     statusEl.textContent = e.message;
@@ -590,8 +481,64 @@ connectBtn.addEventListener("click", async () => {
 });
 
 
+// ---------- Exit Focused Practice ----------
+function exitFocusedPractice() {
+    console.error("🚨 exitFocusedPractice CALLED");
+  console.trace();
+  practiceMode = false;
+  practiceSequence = null;
+  practiceIndex = 0;
+
+  mistakesLog = { notes: {}, chords: {}, durations: {} };
+  window.mistakesLog = mistakesLog;
+
+  practiceProgressEl.textContent = "";
+  practiceOutputDiv.style.display = "none";
+  stopPracticeBtn.style.display = "none";
+
+  if (!practiceMode) {
+  pickExpectedNote();
+  }
+}
+
+
+
+
+// ---------- Maybe Enter Focused Practice ----------
+async function maybeEnterFocusedPractice() {
+  if (practiceMode) return;
+
+  const decision = shouldEnterFocusedPractice(mistakesLog, lastAgentSuggestion);
+  if (!decision.enter) return;
+
+  lastAgentSuggestion = Date.now();
+
+  expectedNoteEl.textContent = `🎯 ${decision.reason}`;
+
+  const sequence = await createFocusedPractice({
+    mistakes: mistakesLog
+  });
+
+  if (!sequence || sequence.length === 0) {
+    console.warn("⚠️ Focused practice aborted – empty sequence");
+    return;
+  }
+
+  enterFocusedPractice(sequence);
+}
+
+
+
+
+
 // ---------- Pick expected ----------
 function pickExpectedNote() {
+    if (practiceMode) {
+  console.error("❌ pickExpectedNote CALLED DURING PRACTICE");
+  console.trace();
+  return;
+}
+
   console.log("🔄 PICKING NEW NOTE - resetting flags");
   firstAttempt = true;
   noteColor = "black";
@@ -723,8 +670,17 @@ function handleMIDIMessage(e) {
   
   // Check if this is a note-off message (status 128-143 or velocity 0)
   const isNoteOff = (status >= 128 && status < 144) || velocity === 0;
+
+  if (practiceMode && !practiceSequence) return;
+
   
-  if (status >= 0xF8 || !expected) return;
+ if (status >= 0xF8) return;
+
+if (!expected) {
+  console.warn("MIDI event while expected is null", { practiceMode });
+  return;
+}
+
   if (isProcessing && !isNoteOff) return; // Block new note-on when processing
 
   // ----- HANDLE NOTE RELEASE (for duration checking) -----
@@ -769,11 +725,16 @@ function handleMIDIMessage(e) {
           duration: expected.duration,
           hand: expected.hand
         });
+if (!practiceMode) {
+  maybeEnterFocusedPractice();
+}
       }
       const diff = (noteDuration - expectedDuration).toFixed(1);
+      if (!practiceMode) {
       expectedNoteEl.textContent = `❌ אורך לא נכון (${diff > 0 ? '+' : ''}${diff}s)`;
       noteColor = "red";
       drawSingle(expected);
+      }
     }
     
     noteStartTime = null;
@@ -822,11 +783,15 @@ function handleMIDIMessage(e) {
         logMistake("chord", {
           chordName: expected.chordName
         });
-      }
+if (!practiceMode) {
+  maybeEnterFocusedPractice();
+}      }
+if (!practiceMode) {
       expectedNoteEl.textContent = "❌ נסה/י שוב";
       noteColor = "red";
       drawChord(expected);
     }
+}
     return;
   }
 
@@ -846,7 +811,14 @@ function handleMIDIMessage(e) {
       isProcessing = true; // Block further input
       expectedNoteEl.textContent = "✅ נכון!";
       noteColor = "green";
-      setTimeout(pickExpectedNote, 400);
+setTimeout(() => {
+  if (practiceMode) {
+    practiceIndex++;
+    showPracticeNote();
+  } else {
+    pickExpectedNote();
+  }
+}, 400);
     }
     return;
   }
@@ -899,11 +871,15 @@ function handleMIDIMessage(e) {
         name: expected.name,
         hand: expected.hand
       });
-    }
+if (!practiceMode) {
+  maybeEnterFocusedPractice();
+}    }
+if (!practiceMode) {
     expectedNoteEl.textContent = "❌ נסה/י שוב";
     noteColor = "red";
     drawSingle(expected);
   }
+}
 }
 
 // ---------- Drawing ----------
@@ -932,6 +908,37 @@ function drawSingle(note) {
   new VF.Formatter().format([v], 200);
   v.draw(ctx, stave);
 }
+
+window.callLLM = async function callLLM(prompt) {
+  const response = await fetch(
+    "https://api.groq.com/openai/v1/chat/completions",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${window.APP_CONFIG.GROQ_API_KEY}`
+      },
+      body: JSON.stringify({
+        model: "llama-3.1-8b-instant",
+        temperature: 0.7,
+        messages: [
+          { role: "system", content: "You are a piano practice assistant." },
+          { role: "user", content: prompt }
+        ],
+        temperature: 0.3
+      })
+    }
+  );
+
+  if (!response.ok) {
+    const err = await response.text();
+    console.error("Groq error:", err);
+    throw new Error(err);
+  }
+
+  const data = await response.json();
+  return data.choices?.[0]?.message?.content || "";
+};
 
 function drawTwoHands(ex) {
   staffEl.innerHTML = "";
