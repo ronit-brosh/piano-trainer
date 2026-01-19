@@ -126,6 +126,7 @@ function buildPromptFromMistakes(mistakesLog) {
 
   prompt += "Format EXACTLY like this (no numbering, no text):\n";
   prompt += "NOTE_WITH_OCTAVE, Hand, Duration\n\n";
+  prompt += "IMPORTANT: Always include octave numbers (e.g. C4, D3, F#5). Never output bare note names like C or D."
   prompt += "Examples:\n";
   prompt += "C4, Right, Quarter\n";
   prompt += "E4, Right, Half\n";

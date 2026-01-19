@@ -57,6 +57,7 @@ let lastPressedNote = null; // Track which note is currently pressed
 let metronomeEnabled = false;
 let metronomeInterval = null;
 let lastAgentSuggestion = null;
+let agentBusy = false;
 
 
 // Mistakes tracking
@@ -74,6 +75,10 @@ window.mistakesLog = mistakesLog;
 let practiceSequence = null;
 let practiceIndex = 0;
 let practiceMode = false;
+let focusedRound = 0;
+let focusedMistakesInRound = 0;
+let focusedBestScore = Infinity;
+
 
 // ---------- DOM ----------
 const statusEl = document.getElementById("status");
@@ -90,10 +95,8 @@ let checkDurations = toggleDurationsEl.checked;
 const toggleMetronomeEl = document.getElementById("toggleMetronome");
 const leftHandRadios = document.getElementsByName("leftHandMode");
 const resetScoreBtn = document.getElementById("resetScore");
-const practiceOutputDiv = document.getElementById("practiceOutput");
 const practiceSequenceDisplay = document.getElementById("practiceSequenceDisplay");
 const startPracticeBtn = document.getElementById("startPractice");
-const stopPracticeBtn = document.getElementById("stopPractice");
 const practiceProgressEl = document.getElementById("practiceProgress");
 const virtualKeyboard = document.getElementById("virtualKeyboard");
 const keysContainer = document.getElementById("keys");
@@ -291,7 +294,10 @@ function logMistake(type, data) {
   
   console.log("Current mistakes log:", mistakesLog);
 
-  
+  if (practiceMode) {
+  focusedMistakesInRound++;
+}
+
 
 }
 
@@ -392,15 +398,16 @@ function noteNameToMidi(noteName) {
   return (octave + 1) * 12 + noteMap[note];
 }
 
-stopPracticeBtn.addEventListener("click", exitFocusedPractice);
 
 function enterFocusedPractice(sequence) {
   practiceSequence = sequence;
   practiceIndex = 0;
   practiceMode = true;
+  focusedRound = 0;
+    focusedMistakesInRound = 0;
+    focusedBestScore = Infinity;
 
-  practiceOutputDiv.style.display = "block";
-  stopPracticeBtn.style.display = "inline-block";
+
 
   showPracticeNote();
 }
@@ -409,11 +416,35 @@ function enterFocusedPractice(sequence) {
 
 // ---------- Show Practice Note ----------
 function showPracticeNote() {
-  if (!practiceMode || practiceIndex >= practiceSequence.length) {
-  expectedNoteEl.textContent = "🎉 סיימת את התרגול!";
-  setTimeout(exitFocusedPractice, 1500);
+ if (!practiceMode || practiceIndex >= practiceSequence.length) {
+  focusedRound++;
+
+  if (focusedMistakesInRound < focusedBestScore) {
+    focusedBestScore = focusedMistakesInRound;
+  }
+
+  // הצלחה – כמעט בלי טעויות
+  if (focusedMistakesInRound <= 1) {
+    expectedNoteEl.textContent = "✅ נראה שזה התייצב";
+    setTimeout(exitFocusedPractice, 1200);
+    return;
+  }
+
+  // חזרה על אותו רצף (עד 3 פעמים)
+  if (focusedRound < 3) {
+    expectedNoteEl.textContent = "🔁 ננסה שוב לחזק את זה";
+    focusedMistakesInRound = 0;
+    practiceIndex = 0;
+    setTimeout(showPracticeNote, 800);
+    return;
+  }
+
+  // יותר מדי סיבובים
+  expectedNoteEl.textContent = "🟡 נעצור כאן ונמשיך הלאה";
+  setTimeout(exitFocusedPractice, 1200);
   return;
 }
+
 
   const item = practiceSequence[practiceIndex];
   expected = item;
@@ -483,8 +514,6 @@ if (!practiceMode) {
 
 // ---------- Exit Focused Practice ----------
 function exitFocusedPractice() {
-    console.error("🚨 exitFocusedPractice CALLED");
-  console.trace();
   practiceMode = false;
   practiceSequence = null;
   practiceIndex = 0;
@@ -493,43 +522,42 @@ function exitFocusedPractice() {
   window.mistakesLog = mistakesLog;
 
   practiceProgressEl.textContent = "";
-  practiceOutputDiv.style.display = "none";
-  stopPracticeBtn.style.display = "none";
 
-  if (!practiceMode) {
-  pickExpectedNote();
-  }
+ pickExpectedNote();
 }
-
 
 
 
 // ---------- Maybe Enter Focused Practice ----------
 async function maybeEnterFocusedPractice() {
   if (practiceMode) return;
+  if (agentBusy) return;
 
   const decision = shouldEnterFocusedPractice(mistakesLog, lastAgentSuggestion);
   if (!decision.enter) return;
 
+  agentBusy = true;
   lastAgentSuggestion = Date.now();
 
-  expectedNoteEl.textContent = `🎯 ${decision.reason}`;
+  // 👇 החיווי
+  expectedNoteEl.textContent = "🎯 מזהה קושי… יוצר תרגול ממוקד";
+  practiceProgressEl.textContent = "⏳ פונה ל-Groq…";
 
   const sequence = await createFocusedPractice({
     mistakes: mistakesLog
   });
 
+  agentBusy = false;
+
   if (!sequence || sequence.length === 0) {
-    console.warn("⚠️ Focused practice aborted – empty sequence");
+    practiceProgressEl.textContent = "";
+    expectedNoteEl.textContent = "⚠️ לא הצלחתי לבנות תרגול";
     return;
   }
 
+  // 👇 רק עכשיו נכנסים למצב תרגול
   enterFocusedPractice(sequence);
 }
-
-
-
-
 
 // ---------- Pick expected ----------
 function pickExpectedNote() {
