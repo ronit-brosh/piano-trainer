@@ -55,6 +55,78 @@
   background: #ddd;
 }
 
+/* Chord dialog */
+.chord-dialog-overlay {
+  display: none;
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.5);
+  z-index: 100;
+  justify-content: center;
+  align-items: center;
+}
+.chord-dialog-overlay.open { display: flex; }
+.chord-dialog {
+  background: white;
+  border-radius: 12px;
+  padding: 24px;
+  max-width: 700px;
+  width: 90%;
+  max-height: 85vh;
+  overflow-y: auto;
+  direction: rtl;
+}
+.chord-dialog h2 { margin-top: 0; }
+.chord-card {
+  margin-bottom: 20px;
+  padding: 10px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+}
+.chord-card h3 { margin: 0 0 8px 0; }
+.mini-piano {
+  display: flex;
+  direction: ltr;
+  position: relative;
+  height: 80px;
+  margin: 0 auto;
+  width: fit-content;
+}
+.mini-piano .white-key {
+  width: 32px;
+  height: 80px;
+  border: 1px solid #999;
+  border-radius: 0 0 4px 4px;
+  background: #fff;
+  position: relative;
+  z-index: 1;
+}
+.mini-piano .white-key.pressed {
+  background: #4CAF50;
+}
+.mini-piano .black-key {
+  width: 20px;
+  height: 50px;
+  background: #333;
+  border-radius: 0 0 3px 3px;
+  position: absolute;
+  z-index: 2;
+}
+.mini-piano .black-key.pressed {
+  background: #66BB6A;
+}
+.mini-piano .key-label {
+  position: absolute;
+  bottom: 4px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 9px;
+  color: #666;
+  z-index: 3;
+  pointer-events: none;
+}
+.mini-piano .white-key.pressed .key-label { color: white; }
+
   </style>
 </head>
 
@@ -63,7 +135,7 @@
 
   <button id="connect">חבר MIDI</button>
 <label style="margin-right:10px;">
-  <input type="checkbox" id="mockMidiToggle" checked />
+  <input type="checkbox" id="mockMidiToggle" />
   Mock MIDI
 </label>
 
@@ -71,27 +143,38 @@
 
   <div style="margin: 20px 0;">
     <label>
-      <strong>בחר אופן נגינה:</strong>
-      <select id="handMode">
-         <option value="right">יד ימין בלבד</option>
-        <option value="left">יד שמאל בלבד</option>
-         <option value="separate">שתי ידיים (בנפרד)</option>
-        <option value="together">שתי ידיים (יחד)</option>
-
+      <strong>יד ימין:</strong>
+      <select id="rightHandMode">
+        <option value="notes">תווים</option>
+        <option value="chords">אקורדים</option>
+        <option value="none">כלום</option>
       </select>
     </label>
 
-    <div style="margin-top: 10px;">
-      <strong>יד שמאל:</strong><br/>
-      <label><input type="radio" name="leftHandMode" value="notes" checked /> תווים</label>
-      <label><input type="radio" name="leftHandMode" value="chords" /> אקורדים</label>
-      <label><input type="radio" name="leftHandMode" value="both" /> תווים ואקורדים</label>
-    </div>
+    <label style="margin-right: 15px;">
+      <strong>יד שמאל:</strong>
+      <select id="leftHandMode">
+        <option value="notes">תווים</option>
+        <option value="chords">אקורדים</option>
+        <option value="none">כלום</option>
+      </select>
+    </label>
 
     <label><input type="checkbox" id="toggleNoteNames" checked /> הצג שמות תווים</label><br/>
+    <label><input type="checkbox" id="toggle4Fingers" /> 4 אצבעות</label><br/>
     <label><input type="checkbox" id="toggleDurations"  /> בדוק אורך תו</label><br/>
-    <label><input type="checkbox" id="toggleMetronome" /> מטרונום</label>
+    <label><input type="checkbox" id="toggleMetronome" /> מטרונום</label><br/>
+    <label><input type="checkbox" id="toggleLearningMode" /> מצב לימוד</label><br/>
+    <button id="showChordsBtn" style="margin-top:8px; font-size:14px; padding:6px 14px;">תראה לי אקורדים</button>
   </div>
+
+<div class="chord-dialog-overlay" id="chordDialogOverlay">
+  <div class="chord-dialog">
+    <h2>אקורדים בתרגול</h2>
+    <div id="chordCards"></div>
+    <button id="closeChordDialog" style="margin-top:10px;">סגור</button>
+  </div>
+</div>
 
   <p id="expectedNote"></p>
 

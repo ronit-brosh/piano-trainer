@@ -16,8 +16,16 @@ if (!GROQ_API_KEY) {
 // ---------- Utils ----------
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 
-const RIGHT_HAND_NOTES = [60, 62, 64, 65, 67, 69, 71];
-const LEFT_HAND_NOTES  = [48, 50, 52, 53, 55, 57, 59];
+// Note pools per finger count
+// 3 fingers: B,C,D,E (right) / G,A,B (left)
+// 4 fingers: B,C,D,E,F,G (right) / G,A,B,C,D (left)
+const RIGHT_HAND_3F = Array.from({ length: 6 }, (_, i) => 59 + i); // B3–D#4
+const RIGHT_HAND_4F = Array.from({ length: 9 }, (_, i) => 59 + i); // B3–G4
+const LEFT_HAND_3F  = Array.from({ length: 5 }, (_, i) => 43 + i); // G2–B2
+const LEFT_HAND_4F  = Array.from({ length: 10 }, (_, i) => 43 + i); // G2–C#3+
+
+function getRightNotes() { return fourFingers ? RIGHT_HAND_4F : RIGHT_HAND_3F; }
+function getLeftNotes()  { return fourFingers ? LEFT_HAND_4F : LEFT_HAND_3F; }
 
 // Note durations (in seconds at 80 BPM)
 const TEMPO_BPM = 80;
@@ -28,16 +36,41 @@ const DURATIONS = [
   { name: "w", display: "𝅝 שלם", vexflow: "w", seconds: BEAT_DURATION * 4, tolerance: 0.6 }
 ];
 
-// Specific chords for left hand only
-const LEFT_HAND_CHORDS = [
-  { name: "C3+E3+G3", notes: [48, 52, 55], display: "C3+E3+G3" },    // C3-E3-G3
-  { name: "B2+F3+G3", notes: [47, 53, 55], display: "B2+F3+G3" },    // B2-F3-G3
+// Named chords (matched by pitch class – any octave accepted)
+const CHORD_DEFS = [
+  { label: "C",  notes: [60, 64, 67] },       // C, E, G
+  { label: "F",  notes: [65, 69, 72] },       // F, A, C
+  { label: "G",  notes: [67, 71, 74] },       // G, B, D
+  { label: "Am", notes: [69, 72, 76] },       // A, C, E
+  { label: "Bb", notes: [70, 74, 77] },       // Bb, D, F
+  { label: "G7", notes: [67, 71, 74, 77] },   // G, B, D, F
+  { label: "A7", notes: [69, 73, 76, 79] },   // A, C#, E, G
 ];
+
+// Same chords for both hands, different octave for drawing
+const RIGHT_HAND_CHORDS = CHORD_DEFS.map(c => ({
+  ...c, display: c.label, chordName: c.label
+}));
+const LEFT_HAND_CHORDS = CHORD_DEFS.map(c => ({
+  ...c,
+  notes: c.notes.map(n => n - 12), // one octave lower for bass clef
+  display: c.label, chordName: c.label
+}));
 
 function midiToNoteName(midi) {
   const note = NOTE_NAMES[midi % 12];
   const octave = Math.floor(midi / 12) - 1;
   return `${note}${octave}`;
+}
+
+// Display name without octave
+function midiToDisplayName(midi) {
+  return NOTE_NAMES[midi % 12];
+}
+
+// Check if two MIDI notes are the same pitch class (ignore octave)
+function samePitchClass(midi1, midi2) {
+  return midi1 % 12 === midi2 % 12;
 }
 
 // ---------- State ----------
@@ -47,10 +80,10 @@ let correctCount = 0;
 let wrongCount = 0;
 let firstAttempt = true;
 
-let handMode = "right";
+let rightHandMode = "notes"; // "notes", "chords", or "none"
+let leftHandMode = "none";  // "notes", "chords", or "none"
 let showNoteNames = true;
-//let checkDurations = true;
-let leftHandMode = "notes"; // "notes", "chords", or "both"
+let fourFingers = false;
 let isProcessing = false; // Prevent double counting during transition
 let noteStartTime = null; // Track when note was pressed
 let lastPressedNote = null; // Track which note is currently pressed
@@ -58,6 +91,7 @@ let metronomeEnabled = false;
 let metronomeInterval = null;
 let lastAgentSuggestion = null;
 let agentBusy = false;
+let learningMode = false;
 
 
 // Mistakes tracking
@@ -87,13 +121,14 @@ const expectedNoteEl = document.getElementById("expectedNote");
 const staffEl = document.getElementById("staff");
 const correctCountEl = document.getElementById("correctCount");
 const wrongCountEl = document.getElementById("wrongCount");
-const handModeEl = document.getElementById("handMode");
+const rightHandModeEl = document.getElementById("rightHandMode");
+const leftHandModeEl = document.getElementById("leftHandMode");
 const toggleNoteNamesEl = document.getElementById("toggleNoteNames");
 const toggleDurationsEl = document.getElementById("toggleDurations");
 let checkDurations = toggleDurationsEl.checked;
 
 const toggleMetronomeEl = document.getElementById("toggleMetronome");
-const leftHandRadios = document.getElementsByName("leftHandMode");
+const toggleLearningModeEl = document.getElementById("toggleLearningMode");
 const resetScoreBtn = document.getElementById("resetScore");
 const practiceSequenceDisplay = document.getElementById("practiceSequenceDisplay");
 const startPracticeBtn = document.getElementById("startPractice");
@@ -119,12 +154,14 @@ const VIRTUAL_KEYS = [
   { name: "B", midi: 71 }
 ];
 
+// Init based on mock toggle default
 if (mockMidiToggle.checked) {
-    MidiInput.mode = "mock";
+  MidiInput.mode = "mock";
   virtualKeyboard.style.display = "block";
   renderVirtualKeyboard();
 } else {
-    MidiInput.mode = "real";
+  MidiInput.mode = "real";
+  virtualKeyboard.style.display = "none";
 }
 
 function renderVirtualKeyboard() {
@@ -171,11 +208,14 @@ if (!practiceMode) {
 
 
 // ---------- Hand mode ----------
-handModeEl.addEventListener("change", () => {
-  handMode = handModeEl.value;
-if (!practiceMode) {
-  pickExpectedNote();
-}
+rightHandModeEl.addEventListener("change", () => {
+  rightHandMode = rightHandModeEl.value;
+  if (!practiceMode) pickExpectedNote();
+});
+
+leftHandModeEl.addEventListener("change", () => {
+  leftHandMode = leftHandModeEl.value;
+  if (!practiceMode) pickExpectedNote();
 });
 
 // ---------- Toggles ----------
@@ -189,19 +229,6 @@ toggleNoteNamesEl.addEventListener("change", () => {
 
 toggleDurationsEl.addEventListener("change", () => {
   checkDurations = toggleDurationsEl.checked;
-  
-  // This would affect future note generation if you want to randomize durations
-});
-
-// Listen to left hand mode radio buttons
-leftHandRadios.forEach(radio => {
-  radio.addEventListener("change", () => {
-    leftHandMode = radio.value;
-
-    if (!practiceMode) {
-  pickExpectedNote(); // Generate new note with updated settings
-}
-  });
 });
 
 // ---------- Metronome ----------
@@ -249,6 +276,85 @@ toggleMetronomeEl.addEventListener("change", () => {
     stopMetronome();
   }
 });
+
+toggleLearningModeEl.addEventListener("change", () => {
+  learningMode = toggleLearningModeEl.checked;
+});
+
+const toggle4FingersEl = document.getElementById("toggle4Fingers");
+toggle4FingersEl.addEventListener("change", () => {
+  fourFingers = toggle4FingersEl.checked;
+  if (!practiceMode) pickExpectedNote();
+});
+
+// ---------- Chord Dialog ----------
+const chordDialogOverlay = document.getElementById("chordDialogOverlay");
+const chordCardsEl = document.getElementById("chordCards");
+document.getElementById("showChordsBtn").addEventListener("click", () => {
+  renderChordCards();
+  chordDialogOverlay.classList.add("open");
+});
+document.getElementById("closeChordDialog").addEventListener("click", () => {
+  chordDialogOverlay.classList.remove("open");
+});
+chordDialogOverlay.addEventListener("click", (e) => {
+  if (e.target === chordDialogOverlay) chordDialogOverlay.classList.remove("open");
+});
+
+function renderChordCards() {
+  chordCardsEl.innerHTML = "";
+  // One octave of white keys: C D E F G A B (MIDI 60-71)
+  const WHITE_KEYS = [
+    { note: "C", midi: 60 }, { note: "D", midi: 62 }, { note: "E", midi: 64 },
+    { note: "F", midi: 65 }, { note: "G", midi: 67 }, { note: "A", midi: 69 }, { note: "B", midi: 71 }
+  ];
+  // Black keys with positions (offset from left of parent white key)
+  const BLACK_KEYS = [
+    { note: "C#", midi: 61, afterWhite: 0 }, // between C and D
+    { note: "D#", midi: 63, afterWhite: 1 }, // between D and E
+    { note: "F#", midi: 66, afterWhite: 3 }, // between F and G
+    { note: "G#", midi: 68, afterWhite: 4 }, // between G and A
+    { note: "A#", midi: 70, afterWhite: 5 }, // between A and B (= Bb)
+  ];
+
+  CHORD_DEFS.forEach(chord => {
+    const card = document.createElement("div");
+    card.className = "chord-card";
+
+    const title = document.createElement("h3");
+    title.textContent = chord.label;
+    card.appendChild(title);
+
+    // Mini piano
+    const piano = document.createElement("div");
+    piano.className = "mini-piano";
+
+    const pressedPitchClasses = new Set(chord.notes.map(n => n % 12));
+    const whiteKeyWidth = 32;
+
+    // White keys
+    WHITE_KEYS.forEach((wk) => {
+      const key = document.createElement("div");
+      key.className = "white-key" + (pressedPitchClasses.has(wk.midi % 12) ? " pressed" : "");
+      const label = document.createElement("span");
+      label.className = "key-label";
+      label.textContent = wk.note;
+      key.appendChild(label);
+      piano.appendChild(key);
+    });
+
+    // Black keys (absolute positioned)
+    BLACK_KEYS.forEach((bk) => {
+      const key = document.createElement("div");
+      key.className = "black-key" + (pressedPitchClasses.has(bk.midi % 12) ? " pressed" : "");
+      key.style.left = ((bk.afterWhite + 1) * whiteKeyWidth - 10) + "px";
+      piano.appendChild(key);
+    });
+
+    card.appendChild(piano);
+    chordCardsEl.appendChild(card);
+  });
+}
 
 // ---------- Reset Score ----------
 resetScoreBtn.addEventListener("click", () => {
@@ -530,6 +636,7 @@ function exitFocusedPractice() {
 
 // ---------- Maybe Enter Focused Practice ----------
 async function maybeEnterFocusedPractice() {
+  if (!learningMode) return;
   if (practiceMode) return;
   if (agentBusy) return;
 
@@ -570,123 +677,57 @@ function pickExpectedNote() {
   console.log("🔄 PICKING NEW NOTE - resetting flags");
   firstAttempt = true;
   noteColor = "black";
-  isProcessing = false; // Reset processing flag
+  isProcessing = false;
 
-  if (handMode === "together") {
-    const r = RIGHT_HAND_NOTES[Math.floor(Math.random() * RIGHT_HAND_NOTES.length)];
-    const l = LEFT_HAND_NOTES[Math.floor(Math.random() * LEFT_HAND_NOTES.length)];
+  // Build list of active hands and their modes
+  const options = [];
+  if (rightHandMode !== "none") options.push({ hand: "right", mode: rightHandMode });
+  if (leftHandMode !== "none") options.push({ hand: "left", mode: leftHandMode });
 
-    expected = {
-      mode: "together",
-      right: { midi: r, name: midiToNoteName(r) },
-      left:  { midi: l, name: midiToNoteName(l) },
-      pressed: { right: false, left: false }
-    };
-
-    let msg = "נגן/י בשתי הידיים יחד";
-    if (showNoteNames) {
-      msg += ` (ימין: ${expected.right.name}, שמאל: ${expected.left.name})`;
-    }
-    expectedNoteEl.textContent = msg;
-    drawTwoHands(expected);
+  if (options.length === 0) {
+    expectedNoteEl.textContent = "בחר לפחות יד אחת";
     return;
   }
 
-  // ---- single hand or chord ----
-  let pool;
-  if (handMode === "right") {
-    pool = RIGHT_HAND_NOTES;
-  } else if (handMode === "left") {
-    // For left hand, check the mode setting
-    if (leftHandMode === "chords") {
-      // Only chords
-      const chord = LEFT_HAND_CHORDS[Math.floor(Math.random() * LEFT_HAND_CHORDS.length)];
-      
-      expected = {
-        mode: "chord",
-        hand: "left",
-        chord: chord.notes,
-        chordName: chord.display,
-        pressed: new Set()
-      };
-      
-      let msg = "יד שמאל - אקורד";
-      if (showNoteNames) {
-        msg += ` (${chord.display})`;
-      }
-      expectedNoteEl.textContent = msg;
-      drawChord(expected);
-      return;
-    } else if (leftHandMode === "both" && Math.random() < 0.5) {
-      // Mix of chords and notes - 50% chance for chord
-      const chord = LEFT_HAND_CHORDS[Math.floor(Math.random() * LEFT_HAND_CHORDS.length)];
-      
-      expected = {
-        mode: "chord",
-        hand: "left",
-        chord: chord.notes,
-        chordName: chord.display,
-        pressed: new Set()
-      };
-      
-      let msg = "יד שמאל - אקורד";
-      if (showNoteNames) {
-        msg += ` (${chord.display})`;
-      }
-      expectedNoteEl.textContent = msg;
-      drawChord(expected);
-      return;
-    }
-    // leftHandMode === "notes" or both with 50% chance - show single note
-    pool = LEFT_HAND_NOTES;
-  } else {
-    // separate mode
-    pool = [...RIGHT_HAND_NOTES, ...LEFT_HAND_NOTES];
-    
-    // In separate mode, check if we should pick a chord for left hand
-    if (leftHandMode === "chords" || (leftHandMode === "both" && Math.random() < 0.3)) {
-      // Randomly decide if this should be a left hand chord
-      if (Math.random() < 0.5) { // 50% chance when in separate mode
-        const chord = LEFT_HAND_CHORDS[Math.floor(Math.random() * LEFT_HAND_CHORDS.length)];
-        
-        expected = {
-          mode: "chord",
-          hand: "left",
-          chord: chord.notes,
-          chordName: chord.display,
-          pressed: new Set()
-        };
-        
-        let msg = "יד שמאל - אקורד";
-        if (showNoteNames) {
-          msg += ` (${chord.display})`;
-        }
-        expectedNoteEl.textContent = msg;
-        drawChord(expected);
-        return;
-      }
-    }
+  // Pick a random active hand
+  const pick = options[Math.floor(Math.random() * options.length)];
+  const pool = pick.hand === "right" ? getRightNotes() : getLeftNotes();
+  const chords = pick.hand === "right" ? RIGHT_HAND_CHORDS : LEFT_HAND_CHORDS;
+  const handLabel = pick.hand === "right" ? "יד ימין" : "יד שמאל";
+
+  if (pick.mode === "chords") {
+    const chord = chords[Math.floor(Math.random() * chords.length)];
+    expected = {
+      mode: "chord",
+      hand: pick.hand,
+      chord: chord.notes,
+      chordName: chord.display,
+      pressed: new Set()
+    };
+    let msg = `${handLabel} - אקורד`;
+    if (showNoteNames) msg += ` ${chord.label}`;
+    expectedNoteEl.textContent = msg;
+    drawChord(expected);
+    return;
   }
 
+  // notes mode
   const midi = pool[Math.floor(Math.random() * pool.length)];
-  const hand = midi >= 60 ? "right" : "left";
   const duration = DURATIONS[Math.floor(Math.random() * DURATIONS.length)];
+  console.log(`🎲 Picked MIDI ${midi} (${midiToNoteName(midi)}) from pool of ${pool.length} chromatic notes [${pool[0]}–${pool[pool.length-1]}]`);
 
   expected = {
     mode: "single",
     midi,
-    hand,
+    hand: pick.hand,
     name: midiToNoteName(midi),
+    displayName: midiToDisplayName(midi),
     duration: duration
   };
 
-  let msg = hand === "right" ? "יד ימין" : "יד שמאל";
-  if (showNoteNames) {
-    msg += ` (${expected.name})`;
-  }
-  if (checkDurations) {
-    msg += ` ${duration.display}`;
-  }
+  let msg = `${handLabel} - תו`;
+  if (showNoteNames) msg += ` ${expected.displayName}`;
+  if (checkDurations) msg += ` ${duration.display}`;
   expectedNoteEl.textContent = msg;
   drawSingle(expected);
 }
@@ -759,7 +800,8 @@ if (!practiceMode) {
       }
       const diff = (noteDuration - expectedDuration).toFixed(1);
       if (!practiceMode) {
-      expectedNoteEl.textContent = `❌ אורך לא נכון (${diff > 0 ? '+' : ''}${diff}s)`;
+      const handLabel = expected.hand === "right" ? "יד ימין" : "יד שמאל";
+      expectedNoteEl.textContent = `❌ ${handLabel} - תו ${expected.displayName || expected.name} ${expected.duration.display} – אורך לא נכון (${diff > 0 ? '+' : ''}${diff}s)`;
       noteColor = "red";
       drawSingle(expected);
       }
@@ -772,14 +814,15 @@ if (!practiceMode) {
   
   if (isNoteOff) return; // Ignore other note-off messages
 
-  // ----- CHORD MODE -----
+  // ----- CHORD MODE (match pitch class – any octave accepted) -----
   if (expected.mode === "chord") {
-    // Check if this note is part of the chord
-    if (expected.chord.includes(note)) {
-      expected.pressed.add(note);
-      console.log("Chord note pressed:", note, "Total pressed:", expected.pressed.size, "Need:", expected.chord.length);
+    // Check if this note matches any chord note by pitch class
+    const matchedChordNote = expected.chord.find(cn => samePitchClass(note, cn));
+    if (matchedChordNote && !expected.pressed.has(matchedChordNote)) {
+      expected.pressed.add(matchedChordNote);
+      console.log("Chord note pressed:", note, "matched:", matchedChordNote, "Total pressed:", expected.pressed.size, "Need:", expected.chord.length);
       drawChord(expected);
-      
+
       // Check if all chord notes are pressed
       if (expected.pressed.size === expected.chord.length) {
         console.log("✅ CHORD COMPLETE!");
@@ -815,7 +858,10 @@ if (!practiceMode) {
   maybeEnterFocusedPractice();
 }      }
 if (!practiceMode) {
-      expectedNoteEl.textContent = "❌ נסה/י שוב";
+      const handLabel = expected.hand === "right" ? "יד ימין" : "יד שמאל";
+      let msg = `❌ ${handLabel} - אקורד`;
+      if (showNoteNames) msg += ` ${expected.chordName}`;
+      expectedNoteEl.textContent = msg;
       noteColor = "red";
       drawChord(expected);
     }
@@ -851,8 +897,8 @@ setTimeout(() => {
     return;
   }
 
-  // ----- SINGLE -----
-  if (note === expected.midi) {
+  // ----- SINGLE (match pitch class – any octave accepted) -----
+  if (samePitchClass(note, expected.midi)) {
     console.log("✅ CORRECT NOTE! firstAttempt:", firstAttempt, "correctCount before:", correctCount);
     
     // If checking durations, just record the start time and wait for release
@@ -903,7 +949,11 @@ if (!practiceMode) {
   maybeEnterFocusedPractice();
 }    }
 if (!practiceMode) {
-    expectedNoteEl.textContent = "❌ נסה/י שוב";
+    const handLabel = expected.hand === "right" ? "יד ימין" : "יד שמאל";
+    let msg = `❌ ${handLabel} - תו`;
+    if (showNoteNames) msg += ` ${expected.displayName || expected.name}`;
+    if (checkDurations) msg += ` ${expected.duration.display}`;
+    expectedNoteEl.textContent = msg;
     noteColor = "red";
     drawSingle(expected);
   }
@@ -911,30 +961,39 @@ if (!practiceMode) {
 }
 
 // ---------- Drawing ----------
-function drawSingle(note) {
+function drawEmptyStaves() {
   staffEl.innerHTML = "";
   const VF = Vex.Flow;
   const r = new VF.Renderer(staffEl, VF.Renderer.Backends.SVG);
   r.resize(300, 220);
   const ctx = r.getContext();
-
   const treble = new VF.Stave(10, 40, 280);
   treble.addClef("treble").setContext(ctx).draw();
   const bass = new VF.Stave(10, 120, 280);
   bass.addClef("bass").setContext(ctx).draw();
+  return { VF, ctx, treble, bass };
+}
 
-  const stave = note.hand === "right" ? treble : bass;
-  const clef = note.hand === "right" ? "treble" : "bass";
+function drawSingle(note) {
+  const { VF, ctx, treble, bass } = drawEmptyStaves();
+  try {
+    const stave = note.hand === "right" ? treble : bass;
+    const clef = note.hand === "right" ? "treble" : "bass";
 
-  const key = note.name.replace(/([A-G]#?)(\d)/, (_, n, o) => `${n.toLowerCase()}/${o}`);
-  const duration = note.duration ? note.duration.vexflow : "q";
-  const sn = new VF.StaveNote({ clef, keys: [key], duration: duration });
-  sn.setStyle({ fillStyle: noteColor });
+    const key = note.name.replace(/([A-G][#b]?)(\d)/, (_, n, o) => `${n.toLowerCase()}/${o}`);
+    const duration = note.duration ? note.duration.vexflow : "q";
+    const sn = new VF.StaveNote({ clef, keys: [key], duration: duration });
+    // Note: VexFlow 4.2.5 Accidental is broken (setNote not a function).
+    // The key string "c#/4" already positions the note correctly on the staff.
+    sn.setStyle({ fillStyle: noteColor });
 
-  const v = new VF.Voice({ num_beats: duration === "w" ? 4 : (duration === "h" ? 2 : 1), beat_value: 4 });
-  v.addTickables([sn]);
-  new VF.Formatter().format([v], 200);
-  v.draw(ctx, stave);
+    const v = new VF.Voice({ num_beats: duration === "w" ? 4 : (duration === "h" ? 2 : 1), beat_value: 4 });
+    v.addTickables([sn]);
+    new VF.Formatter().format([v], 200);
+    v.draw(ctx, stave);
+  } catch (e) {
+    console.error("drawSingle error:", e, note);
+  }
 }
 
 window.callLLM = async function callLLM(prompt) {
@@ -969,80 +1028,93 @@ window.callLLM = async function callLLM(prompt) {
 };
 
 function drawTwoHands(ex) {
-  staffEl.innerHTML = "";
-  const VF = Vex.Flow;
-  const r = new VF.Renderer(staffEl, VF.Renderer.Backends.SVG);
-  r.resize(300, 220);
-  const ctx = r.getContext();
+  const { VF, ctx, treble, bass } = drawEmptyStaves();
+  try {
+    const rk = ex.right.name.replace(/([A-G][#b]?)(\d)/, (_, n, o) => `${n.toLowerCase()}/${o}`);
+    const lk = ex.left.name.replace(/([A-G][#b]?)(\d)/, (_, n, o) => `${n.toLowerCase()}/${o}`);
 
-  const treble = new VF.Stave(10, 40, 280);
-  treble.addClef("treble").setContext(ctx).draw();
-  const bass = new VF.Stave(10, 120, 280);
-  bass.addClef("bass").setContext(ctx).draw();
+    const rn = new VF.StaveNote({ clef: "treble", keys: [rk], duration: "q" });
+    const ln = new VF.StaveNote({ clef: "bass", keys: [lk], duration: "q" });
 
-  const rk = ex.right.name.replace(/([A-G])(\d)/, (_, n, o) => `${n.toLowerCase()}/${o}`);
-  const lk = ex.left.name.replace(/([A-G])(\d)/, (_, n, o) => `${n.toLowerCase()}/${o}`);
+    rn.setStyle({ fillStyle: ex.pressed.right ? "green" : "black" });
+    ln.setStyle({ fillStyle: ex.pressed.left ? "green" : "black" });
 
-  const rn = new VF.StaveNote({ clef: "treble", keys: [rk], duration: "q" });
-  const ln = new VF.StaveNote({ clef: "bass", keys: [lk], duration: "q" });
+    const rv = new VF.Voice({ num_beats: 1, beat_value: 4 });
+    rv.addTickables([rn]);
+    new VF.Formatter().format([rv], 200);
+    rv.draw(ctx, treble);
 
-  rn.setStyle({ fillStyle: ex.pressed.right ? "green" : "black" });
-  ln.setStyle({ fillStyle: ex.pressed.left ? "green" : "black" });
-
-  const rv = new VF.Voice({ num_beats: 1, beat_value: 4 });
-  rv.addTickables([rn]);
-  new VF.Formatter().format([rv], 200);
-  rv.draw(ctx, treble);
-  
-  const lv = new VF.Voice({ num_beats: 1, beat_value: 4 });
-  lv.addTickables([ln]);
-  new VF.Formatter().format([lv], 200);
-  lv.draw(ctx, bass);
+    const lv = new VF.Voice({ num_beats: 1, beat_value: 4 });
+    lv.addTickables([ln]);
+    new VF.Formatter().format([lv], 200);
+    lv.draw(ctx, bass);
+  } catch (e) {
+    console.error("drawTwoHands error:", e, ex);
+  }
 }
 
 function drawChord(chordData) {
-  staffEl.innerHTML = "";
-  const VF = Vex.Flow;
-  const r = new VF.Renderer(staffEl, VF.Renderer.Backends.SVG);
-  r.resize(300, 220);
-  const ctx = r.getContext();
+  const { VF, ctx, treble, bass } = drawEmptyStaves();
+  try {
+    const stave = chordData.hand === "right" ? treble : bass;
+    const clef = chordData.hand === "right" ? "treble" : "bass";
 
-  const treble = new VF.Stave(10, 40, 280);
-  treble.addClef("treble").setContext(ctx).draw();
-  const bass = new VF.Stave(10, 120, 280);
-  bass.addClef("bass").setContext(ctx).draw();
+    const keys = chordData.chord.map(midi => {
+      const noteName = midiToNoteName(midi);
+      return noteName.replace(/([A-G][#b]?)(\d)/, (_, n, o) => `${n.toLowerCase()}/${o}`);
+    });
 
-  const stave = chordData.hand === "right" ? treble : bass;
-  const clef = chordData.hand === "right" ? "treble" : "bass";
+    const chordNote = new VF.StaveNote({ clef, keys, duration: "q" });
 
-  // Convert MIDI notes to VexFlow keys
-  const keys = chordData.chord.map(midi => {
-    const noteName = midiToNoteName(midi);
-    return noteName.replace(/([A-G]#?)(\d)/, (_, n, o) => `${n.toLowerCase()}/${o}`);
-  });
+    chordData.chord.forEach((midi, index) => {
+      let color;
+      if (noteColor === "red") color = "red";
+      else if (noteColor === "green") color = "green";
+      else color = chordData.pressed.has(midi) ? "green" : "black";
+      chordNote.setKeyStyle(index, { fillStyle: color });
+    });
 
-  const chordNote = new VF.StaveNote({ clef, keys, duration: "q" });
-  
-  // Color notes based on whether they've been pressed
-  chordData.chord.forEach((midi, index) => {
-    let color;
-    if (noteColor === "red") {
-      // When there's an error, paint everything red
-      color = "red";
-    } else if (noteColor === "green") {
-      // When complete, paint everything green
-      color = "green";
-    } else {
-      // Normal state - green for pressed, black for not pressed
-      color = chordData.pressed.has(midi) ? "green" : "black";
-    }
-    chordNote.setKeyStyle(index, { fillStyle: color });
-  });
-
-  const v = new VF.Voice({ num_beats: 1, beat_value: 4 });
-  v.addTickables([chordNote]);
-  new VF.Formatter().format([v], 200);
-  v.draw(ctx, stave);
+    const v = new VF.Voice({ num_beats: 1, beat_value: 4 });
+    v.addTickables([chordNote]);
+    new VF.Formatter().format([v], 200);
+    v.draw(ctx, stave);
+  } catch (e) {
+    console.error("drawChord error:", e, chordData);
+  }
 }
+
+// ---------- Startup ----------
+pickExpectedNote();
+
+// Auto-connect MIDI on page load
+(async () => {
+  try {
+    await MidiInput.init(handleMIDIMessage);
+    if (MidiInput.mode === "mock") {
+      statusEl.textContent = "🎹 Mock MIDI פעיל";
+      statusEl.style.color = "blue";
+    } else {
+      statusEl.textContent = "🎹 מחובר ל-MIDI אמיתי";
+      statusEl.style.color = "green";
+    }
+  } catch (e) {
+    console.warn("Auto MIDI init failed:", e.message);
+    statusEl.textContent = "לא מחובר – לחצ/י 'חבר MIDI' או הפעל/י Mock";
+    statusEl.style.color = "gray";
+    // Retry on first user click anywhere on the page
+    const retryOnClick = async () => {
+      document.removeEventListener("click", retryOnClick);
+      if (MidiInput.handler) return; // Already connected
+      try {
+        await MidiInput.init(handleMIDIMessage);
+        statusEl.textContent = "🎹 מחובר ל-MIDI אמיתי";
+        statusEl.style.color = "green";
+      } catch (err) {
+        console.warn("MIDI retry failed:", err.message);
+      }
+    };
+    document.addEventListener("click", retryOnClick);
+  }
+})();
 
 });
